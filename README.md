@@ -4,6 +4,9 @@ Interactive viewer and analyzer for AIGER circuits (`.aag` / `.aig` files).
 
 Built with Streamlit, NetworkX, and the [aiger](https://github.com/wjrforcyber/aiger) C library.
 
+> [!TIP]
+> This repo is designed for data analysis. It is a bad idea to render a large aig file for bug detection, MRE (Minimal reproducible example) should be created for debug. A pre-process method implemented in mockturtle such as [An Automated Testing and Debugging Toolkit for Gate-Level Logic Synthesis Applications](https://arxiv.org/abs/2207.13487) (Also there's a [Youtube](https://www.youtube.com/watch?v=ICk2bWSjUmk) link) is recommended.
+
 ## Setup
 
 ```bash
