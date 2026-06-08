@@ -336,26 +336,38 @@ def main():
                 with st.spinner("Generating plots..."):
                     plots = get_stats_plots(aig_path, selected_keys)
 
-                side_by_side_keys = {"node_type", "edge_type"}
-                side_by_side_selected = [k for k in selected_keys if k in side_by_side_keys]
-                rendered_side_by_side = False
+                if "expanded_plot" not in st.session_state:
+                    st.session_state.expanded_plot = None
 
-                for label in selected_labels:
-                    key = PLOT_OPTIONS[label]
-
-                    if key in side_by_side_keys and len(side_by_side_selected) == 2:
-                        if not rendered_side_by_side:
-                            left, right = st.columns(2)
-                            with left:
-                                st.subheader("Node Type Distribution")
-                                st.pyplot(plots["node_type"])
-                            with right:
-                                st.subheader("Edge Type Breakdown")
-                                st.pyplot(plots["edge_type"])
-                            rendered_side_by_side = True
-                    else:
-                        st.subheader(label)
-                        st.pyplot(plots[key])
+                if st.session_state.expanded_plot is not None:
+                    exp_key = st.session_state.expanded_plot
+                    exp_label = next(
+                        (l for l, k in PLOT_OPTIONS.items() if k == exp_key),
+                        exp_key,
+                    )
+                    col_back, col_spacer = st.columns([1, 10])
+                    with col_back:
+                        if st.button("Back to grid", key="btn_back"):
+                            st.session_state.expanded_plot = None
+                            st.rerun()
+                    st.subheader(exp_label)
+                    st.pyplot(plots[exp_key], use_container_width=True)
+                else:
+                    labels_list = list(selected_labels)
+                    for row_start in range(0, len(labels_list), 3):
+                        row_labels = labels_list[row_start:row_start + 3]
+                        cols = st.columns(3)
+                        for i, label in enumerate(row_labels):
+                            key = PLOT_OPTIONS[label]
+                            with cols[i]:
+                                if st.button(
+                                    label,
+                                    key=f"btn_{key}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.expanded_plot = key
+                                    st.rerun()
+                                st.pyplot(plots[key], use_container_width=True)
 
         with tab_dot:
             dot_str = render_dot_string(aig_path, theme, rankdir, highlight_paths=highlight)
