@@ -175,10 +175,49 @@ class AigerVisualizer:
 
         return G
 
-    def render_dot(self, aig_path, strip=False, integer_lits=False):
+    CP_COLORS = ["#FFD700", "#00CED1", "#7FFF00", "#FF69B4", "#FF8C00", "#9370DB", "#00FA9A", "#DC143C"]
+    CP_OVERLAP_COLOR = "#FF00FF"
+
+    def render_dot(self, aig_path, strip=False, integer_lits=False, highlight_paths=None):
         G = self.get_styled_graph(aig_path, strip, integer_lits)
         s = self.style
         rankdir = s["rankdir"]
+
+        cp_node_colors = {}
+        cp_edge_colors = {}
+        cp_legend = {}
+
+        if highlight_paths:
+            from vaiger.stats import _trace_critical_subgraph, _trace_single_critical_path, _get_circuit_depth, _get_node_types_from_raw
+            depth, R = _get_circuit_depth(G)
+            node_types = _get_node_types_from_raw(G)
+            pi_nodes = {n for n, t in node_types.items() if t == "Input label"}
+            input_boxes = {n for n, t in node_types.items() if t == "Input"}
+            sources = pi_nodes | input_boxes
+
+            node_count = {}
+            edge_count = {}
+            for idx, (po, mode) in enumerate(sorted(highlight_paths.items())):
+                if mode == "single":
+                    nodes, edges = _trace_single_critical_path(po, depth, R, sources)
+                else:
+                    nodes, edges = _trace_critical_subgraph(po, depth, R, sources)
+                if not nodes:
+                    continue
+                color = self.CP_COLORS[idx % len(self.CP_COLORS)]
+                cp_legend[po] = color
+                for node in nodes:
+                    node_count[node] = node_count.get(node, 0) + 1
+                    cp_node_colors[node] = color
+                for edge in edges:
+                    edge_count[edge] = edge_count.get(edge, 0) + 1
+                    cp_edge_colors[edge] = color
+            for node, cnt in node_count.items():
+                if cnt > 1:
+                    cp_node_colors[node] = self.CP_OVERLAP_COLOR
+            for edge, cnt in edge_count.items():
+                if cnt > 1:
+                    cp_edge_colors[edge] = self.CP_OVERLAP_COLOR
 
         pi_labels = []
         po_labels = []
@@ -276,6 +315,11 @@ class AigerVisualizer:
             if ntype.startswith("label_"):
                 attrs.append(f'label="{label}"')
 
+            if cp_node_colors and node in cp_node_colors:
+                attrs = [a for a in attrs if not a.startswith("color=")]
+                attrs.append(f'color="{cp_node_colors[node]}"')
+                attrs.append('penwidth=3')
+
             attr_str = ", ".join(attrs)
             lines.append(f'  "{_qn(node)}" [{attr_str}];')
 
@@ -290,12 +334,11 @@ class AigerVisualizer:
 
         lines.append("")
 
-        for u, v, data in G.edges(data=True):
-            lu = level.get(u, 0)
-            lv = level.get(v, 0)
+        for orig_u, orig_v, data in G.edges(data=True):
+            lu = level.get(orig_u, 0)
+            lv = level.get(orig_v, 0)
             flipped = lu > lv
-            if flipped:
-                u, v = v, u
+            u, v = (orig_v, orig_u) if flipped else (orig_u, orig_v)
             attrs = []
             has_arrowtail = False
             for k, val in data.items():
@@ -321,13 +364,17 @@ class AigerVisualizer:
                     attrs.append(f"{k}={val}")
             if has_arrowtail:
                 attrs.append("dir=both")
+            if cp_edge_colors and (orig_u, orig_v) in cp_edge_colors:
+                attrs = [a for a in attrs if not a.startswith("color=")]
+                attrs.append(f'color="{cp_edge_colors[(orig_u, orig_v)]}"')
+                attrs.append('penwidth=3')
             attr_str = ", ".join(attrs)
             lines.append(f'  "{_qn(u)}" -> "{_qn(v)}" [{attr_str}];')
 
         lines.append("}")
-        return "\n".join(lines)
+        return "\n".join(lines), cp_legend
 
-    def render(self, aig_path, output_path=None, strip=False, integer_lits=False, backend=None):
+    def render(self, aig_path, output_path=None, strip=False, integer_lits=False, backend=None, highlight_paths=None):
         output_path = str(output_path) if output_path else None
 
         if backend is None and output_path:
@@ -341,15 +388,15 @@ class AigerVisualizer:
             backend = "matplotlib"
 
         if backend == "graphviz":
-            return self._render_graphviz(aig_path, output_path, strip, integer_lits)
+            return self._render_graphviz(aig_path, output_path, strip, integer_lits, highlight_paths)
         else:
             return self._render_matplotlib(aig_path, output_path, strip, integer_lits)
 
-    def _render_graphviz(self, aig_path, output_path, strip=False, integer_lits=False):
+    def _render_graphviz(self, aig_path, output_path, strip=False, integer_lits=False, highlight_paths=None):
         if pydot is None:
             raise ImportError("pydot is required for graphviz rendering: pip install pydot")
 
-        dot_str = self.render_dot(aig_path, strip, integer_lits)
+        dot_str, _ = self.render_dot(aig_path, strip, integer_lits, highlight_paths=highlight_paths)
         pydot_graphs = pydot.graph_from_dot_data(dot_str)
         if not pydot_graphs:
             raise ValueError("Failed to parse styled DOT")

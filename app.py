@@ -7,6 +7,7 @@ from vaiger import AigerVisualizer, AigerGraph, AigerWrapper
 from vaiger import stats
 from vaiger.svg_viewer import make_zoomable_svg_html
 from vaiger.visualizer import DEFAULT_STYLE
+from vaiger.stats import compute_critical_path, compute_all_critical_paths
 import networkx as nx
 
 AIGER_EXAMPLES = Path("aiger/examples")
@@ -65,22 +66,23 @@ def load_raw_graph(aig_path):
     return ag.load(aig_path)
 
 
-def render_svg(aig_path, theme_name, rankdir):
+def render_svg(aig_path, theme_name, rankdir, highlight_paths=None):
     overrides = _get_theme_overrides(theme_name, rankdir)
     viz = AigerVisualizer(**overrides)
-    dot_str = viz.render_dot(aig_path)
+    dot_str, legend = viz.render_dot(aig_path, highlight_paths=highlight_paths)
     import pydot
     pydot_graphs = pydot.graph_from_dot_data(dot_str)
     if not pydot_graphs:
-        return None
+        return None, legend
     graph = pydot_graphs[0]
-    return graph.create_svg().decode("utf-8")
+    return graph.create_svg().decode("utf-8"), legend
 
 
-def render_dot_string(aig_path, theme_name, rankdir):
+def render_dot_string(aig_path, theme_name, rankdir, highlight_paths=None):
     overrides = _get_theme_overrides(theme_name, rankdir)
     viz = AigerVisualizer(**overrides)
-    return viz.render_dot(aig_path)
+    dot_str, _ = viz.render_dot(aig_path, highlight_paths=highlight_paths)
+    return dot_str
 
 
 @st.cache_data
@@ -103,6 +105,16 @@ def get_stats_plots(aig_path, selected_keys=None):
         result["fan"] = stats.plot_fan_distribution(raw_G)
     if "edge_type" in selected_keys:
         result["edge_type"] = stats.plot_edge_type_counts(raw_G)
+    if "logic_depth" in selected_keys:
+        result["logic_depth"] = stats.plot_logic_depth(raw_G)
+    if "level_and" in selected_keys:
+        result["level_and"] = stats.plot_level_and_count(raw_G)
+    if "cone_size" in selected_keys:
+        result["cone_size"] = stats.plot_cone_size(raw_G)
+    if "betweenness" in selected_keys:
+        result["betweenness"] = stats.plot_betweenness(raw_G)
+    if "adjacency" in selected_keys:
+        result["adjacency"] = stats.plot_adjacency_heatmap(raw_G)
     return result
 
 
@@ -241,23 +253,61 @@ def main():
         file_name = uploaded.name if uploaded else selected_example
         st.subheader(f":bar_chart: {file_name}")
 
-        col1, col2, col3, col4, col5 = st.columns(5)
+        all_cp = compute_all_critical_paths(raw_G)
+        _, _, cp_length = compute_critical_path(raw_G)
+
+        cp_options = ["None"]
+        cp_path_map = {"None": None}
+        if all_cp:
+            cp_options.append("All critical paths")
+            cp_path_map["All critical paths"] = {po: "all" for po in all_cp}
+            for po, (_, _, length) in sorted(all_cp.items()):
+                label = f"{po} — {length} levels"
+                cp_options.append(label)
+                cp_path_map[label] = {po: "single"}
+
+        cp_selection = st.selectbox("Critical path highlight", cp_options, index=0)
+
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("Nodes", stat_dict["num_nodes"])
         col2.metric("Edges", stat_dict["num_edges"])
         col3.metric("Density", f"{stat_dict['density']:.3f}")
         col4.metric("Avg Degree", f"{stat_dict['avg_degree']:.1f}" if "avg_degree" in stat_dict else "N/A")
         col5.metric("Components", stat_dict["num_connected_components"])
+        col6.metric("Crit. Path", f"{cp_length} levels")
 
         tab_graph, tab_stats, tab_dot = st.tabs([
             "Graph", "Statistics", "DOT Source"
         ])
 
+        highlight = cp_path_map.get(cp_selection)
+
         with tab_graph:
             with st.spinner("Rendering graph SVG..."):
-                svg_html = render_svg(aig_path, theme, rankdir)
+                svg_html, cp_legend = render_svg(aig_path, theme, rankdir, highlight_paths=highlight)
             if svg_html:
                 zoomable_html, _ = make_zoomable_svg_html(svg_html, height=750)
                 st.components.v1.html(zoomable_html, height=750)
+                if cp_legend:
+                    items = []
+                    for po, color in sorted(cp_legend.items()):
+                        items.append(
+                            f'<span style="display:inline-block;width:14px;height:14px;'
+                            f'background:{color};border:1px solid #999;border-radius:2px;'
+                            f'vertical-align:middle;margin-right:4px;"></span>'
+                            f'<span style="font-size:13px;margin-right:12px;">{po}</span>'
+                        )
+                    overlap_item = (
+                        f'<span style="display:inline-block;width:14px;height:14px;'
+                        f'background:#FF00FF;border:1px solid #999;border-radius:2px;'
+                        f'vertical-align:middle;margin-right:4px;"></span>'
+                        f'<span style="font-size:13px;margin-right:12px;">overlap</span>'
+                    )
+                    st.markdown(
+                        '<div style="margin-top:4px;">'
+                        + "".join(items) + overlap_item + "</div>",
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.error("Failed to render graph SVG.")
 
@@ -267,6 +317,11 @@ def main():
                 "Node Type Distribution": "node_type",
                 "Edge Type Breakdown": "edge_type",
                 "Fan-in / Fan-out Distribution": "fan",
+                "Logic Depth Distribution": "logic_depth",
+                "Level-wise AND Count": "level_and",
+                "Cone Size per Output": "cone_size",
+                "Betweenness Centrality": "betweenness",
+                "Adjacency Heatmap": "adjacency",
             }
             selected_labels = st.multiselect(
                 "Select plots to display",
@@ -303,7 +358,7 @@ def main():
                         st.pyplot(plots[key])
 
         with tab_dot:
-            dot_str = render_dot_string(aig_path, theme, rankdir)
+            dot_str = render_dot_string(aig_path, theme, rankdir, highlight_paths=highlight)
             st.code(dot_str, language="dot")
 
     except Exception as e:
