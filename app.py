@@ -1,6 +1,7 @@
 import streamlit as st
 import tempfile
 import os
+import sys
 from pathlib import Path
 
 from vaiger import AigerVisualizer, AigerGraph, AigerWrapper
@@ -231,7 +232,15 @@ def main():
         st.markdown(legend_html, unsafe_allow_html=True)
 
     aig_path = None
-    if uploaded is not None:
+    file_param = os.environ.get("AIG_FILE")
+    if not file_param:
+        for j in range(1, len(sys.argv)):
+            if sys.argv[j] == "--file" and j + 1 < len(sys.argv):
+                file_param = sys.argv[j + 1]
+                break
+    if file_param and Path(file_param).exists():
+        aig_path = str(Path(file_param).resolve())
+    elif uploaded is not None:
         suffix = Path(uploaded.name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded.getvalue())
